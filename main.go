@@ -28,7 +28,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "0.0.0.0:8080", "dashboard listen address (0.0.0.0 = all interfaces)")
+	addr := flag.String("addr", "0.0.0.0:8155", "dashboard listen address (0.0.0.0 = all interfaces)")
 	mode := flag.String("mode", "sprint", "permutation set: sprint | screen | smoke  (no k-quants)")
 	arches := flag.String("arches", "", "limit arches: comma list cnn,bicameral,tricameral (cnn = single MHA)")
 	trainN := flag.Int("train-n", 4096, "train windows per cell (0 = all 80% windows)")
@@ -273,7 +273,7 @@ func dashURLs(addr string) string {
 		}
 	}
 	if port == "" {
-		port = "8080"
+		port = "8155"
 	}
 	all := host == "" || host == "0.0.0.0" || host == "::"
 	if !all {

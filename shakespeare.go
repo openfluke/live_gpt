@@ -7,11 +7,17 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 	"unicode/utf8"
 )
 
-// Same file nanoGPT's shakespeare_char prepare.py downloads (Karpathy char-rnn).
-const shakespeareURL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
+// Same tinyshakespeare file nanoGPT shakespeare_char uses. GitHub raw 429s
+// Go's default User-Agent, so we send one and fall through CDN mirrors.
+var shakespeareURLs = []string{
+	"https://cdn.jsdelivr.net/gh/karpathy/char-rnn@master/data/tinyshakespeare/input.txt",
+	"https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt",
+	"https://github.com/karpathy/char-rnn/raw/master/data/tinyshakespeare/input.txt",
+}
 
 // Corpus is a character-level token stream (nanoGPT shakespeare_char style).
 type Corpus struct {
@@ -49,7 +55,7 @@ func LoadShakespeare(dir string) (*Corpus, error) {
 	}
 	path := filepath.Join(dir, "tinyshakespeare.txt")
 	if _, err := os.Stat(path); err != nil {
-		if err := download(path, shakespeareURL); err != nil {
+		if err := downloadShakespeare(path); err != nil {
 			return nil, err
 		}
 	}
@@ -84,8 +90,28 @@ func CorpusFromString(s string) *Corpus {
 	return &Corpus{IDs: ids, Chars: chars, Index: index}
 }
 
+func downloadShakespeare(path string) error {
+	var last error
+	for _, url := range shakespeareURLs {
+		err := download(path, url)
+		if err == nil {
+			return nil
+		}
+		last = err
+		time.Sleep(400 * time.Millisecond)
+	}
+	return last
+}
+
 func download(path, url string) error {
-	resp, err := http.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "live_gpt (Welvet tide host; +https://github.com/openfluke)")
+	req.Header.Set("Accept", "text/plain,*/*")
+	client := &http.Client{Timeout: 45 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("shakespeare: %w", err)
 	}

@@ -57,7 +57,7 @@ Default **`-mode sprint`**: all dtypes × **FormatNone** × all Welvet train mod
 
 ```bash
 cd live_gpt
-go run . -addr 0.0.0.0:8080
+go run . -addr 0.0.0.0:8155
 # open the dash, press Start
 go run . -mode smoke -autostart   # tiny probe
 go run . -mode screen -arches cnn
