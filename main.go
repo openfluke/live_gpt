@@ -30,7 +30,7 @@ import (
 func main() {
 	addr := flag.String("addr", "0.0.0.0:8155", "dashboard listen address (0.0.0.0 = all interfaces)")
 	mode := flag.String("mode", "sprint", "permutation set: sprint | screen | smoke  (no k-quants)")
-	arches := flag.String("arches", "", "limit arches: comma list cnn,bicameral,tricameral (cnn = single MHA)")
+	arches := flag.String("arches", "", "limit arches: comma list single,bicameral,tricameral (cnn still accepted)")
 	trainN := flag.Int("train-n", 4096, "train windows per cell (0 = all 80% windows)")
 	dataDir := flag.String("data", "data", "tinyshakespeare cache directory")
 	ckptDir := flag.String("ckpt", "checkpoint", "progress + model checkpoint directory")
@@ -188,7 +188,7 @@ func matrix(mode string) (permute.Config, error) {
 	case "screen":
 		s := permute.Sprint()
 		s.Modes = permute.LucyModes()
-		s.Arches = []permute.ArchKind{permute.ArchCNN}
+		s.Arches = []permute.ArchKind{permute.ArchSingle}
 		return s, nil
 	case "smoke":
 		return permute.Config{
@@ -214,13 +214,13 @@ func parseArches(s string) []permute.ArchKind {
 		case "":
 			continue
 		case "cnn", "single":
-			out = append(out, permute.ArchCNN)
+			out = append(out, permute.ArchSingle)
 		case "bicameral", "bi":
 			out = append(out, permute.ArchBicameral)
 		case "tricameral", "tri":
 			out = append(out, permute.ArchTricameral)
 		default:
-			fmt.Fprintf(os.Stderr, "unknown arch %q (cnn|bicameral|tricameral)\n", p)
+			fmt.Fprintf(os.Stderr, "unknown arch %q (single|bicameral|tricameral)\n", p)
 			os.Exit(2)
 		}
 	}
