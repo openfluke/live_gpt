@@ -47,7 +47,7 @@ func main() {
 	fmt.Println(" data: tinyshakespeare char LM (nanoGPT shakespeare_char)")
 	fmt.Println(" net:  Embedding → causal MHA → (cameral) Dense → vocab")
 	fmt.Println(" arch: single×1 | bicameral×2 | tricameral×3  (head only)")
-	fmt.Println(" Score = Throughput × Availability × SoftAcc / 10_000")
+	fmt.Println(" Score = Throughput × Availability × Acc / 10_000")
 	fmt.Println(" phase B: next-char +5 mod vocab (same Lucy remap as MNIST)")
 	fmt.Println("════════════════════════════════════════════════════════════")
 	fmt.Printf(" SIMD linked: %v\n", simd.Enabled())
