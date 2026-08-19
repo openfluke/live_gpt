@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,11 +22,16 @@ import (
 	"github.com/openfluke/tide/dash"
 	"github.com/openfluke/tide/permute"
 	"github.com/openfluke/tide/pulse"
+	"github.com/openfluke/tide/report"
 	"github.com/openfluke/tide/runner"
 	"github.com/openfluke/welvet/core"
 	"github.com/openfluke/welvet/quant"
 	"github.com/openfluke/welvet/simd"
 )
+
+// Version is the live_gpt freeze this binary reports. v0.5.0 is single / bi / tri
+// (1–3 cameral heads). v1.0.0 is reserved for 4+ camerals, which will change the PDF.
+const Version = "0.5.0"
 
 func main() {
 	addr := flag.String("addr", "0.0.0.0:8155", "dashboard listen address (0.0.0.0 = all interfaces)")
@@ -40,10 +46,12 @@ func main() {
 	lr := flag.Float64("lr", 0.02, "learning rate")
 	fresh := flag.Bool("fresh", false, "ignore existing checkpoint and start clean at epoch 1")
 	autostart := flag.Bool("autostart", false, "start training immediately (skip dashboard Start button)")
+	pdfOnly := flag.Bool("pdf", false, "write Lucy PDF from checkpoint and exit (no training)")
+	pdfOut := flag.String("pdf-out", "", "PDF path (default results/live_gpt-v"+Version+"-lucy-report.pdf)")
 	flag.Parse()
 
 	fmt.Println("════════════════════════════════════════════════════════════")
-	fmt.Println(" live_gpt — tide × Welvet causal MHA @ SIMD")
+	fmt.Printf(" live_gpt v%s — tide × Welvet causal MHA @ SIMD\n", Version)
 	fmt.Println(" data: tinyshakespeare char LM (nanoGPT shakespeare_char)")
 	fmt.Println(" net:  Embedding → causal MHA → (cameral) Dense → vocab")
 	fmt.Println(" arch: single×1 | bicameral×2 | tricameral×3  (head only)")
@@ -55,6 +63,30 @@ func main() {
 	fmt.Printf(" Mode:        %s\n", *mode)
 	fmt.Printf(" Checkpoint:  %s (every %ds)\n\n", *ckptDir, *ckptSec)
 
+	pcfg, err := matrix(*mode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if list := parseArches(*arches); len(list) > 0 {
+		pcfg.Arches = list
+	}
+	cells := permute.Expand(pcfg)
+	store := checkpoint.New(*ckptDir, *mode)
+	var resume *checkpoint.Progress
+	if !*fresh {
+		resume, err = store.Load()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "checkpoint load:", err)
+			os.Exit(1)
+		}
+	}
+	if *pdfOnly {
+		writePDFAndExit(resume, cells, *addr, *pdfOut)
+		return
+	}
+
+	fmt.Printf(" Permutations: %d (batch size %d)  dtypes×FormatNone×modes×arches\n", len(cells), *batch)
 	fmt.Println("Loading tinyshakespeare…")
 	corp, err := LoadShakespeare(*dataDir)
 	if err != nil {
@@ -65,26 +97,6 @@ func main() {
 	fmt.Printf("  vocab=%d  seq=%d  train_windows=%d  val_windows=%d\n", sp.Vocab, seqLen, len(sp.Train), len(sp.Val))
 	fmt.Printf("  → each cell trains until all %d windows are seen once (flips at 1/3 and 2/3)\n\n", len(sp.Train))
 
-	pcfg, err := matrix(*mode)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
-	if list := parseArches(*arches); len(list) > 0 {
-		pcfg.Arches = list
-	}
-	cells := permute.Expand(pcfg)
-	fmt.Printf(" Permutations: %d (batch size %d)  dtypes×FormatNone×modes×arches\n", len(cells), *batch)
-
-	store := checkpoint.New(*ckptDir, *mode)
-	var resume *checkpoint.Progress
-	if !*fresh {
-		resume, err = store.Load()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "checkpoint load:", err)
-			os.Exit(1)
-		}
-	}
 	if resume != nil && resume.Inflight != nil && resume.Inflight.TrainOffset > len(sp.Train) {
 		fmt.Fprintf(os.Stderr, "inflight cell %s is at example %d but this run only has %d train windows.\n",
 			resume.Inflight.Cell.ID, resume.Inflight.TrainOffset, len(sp.Train))
@@ -112,7 +124,7 @@ func main() {
 		Addr:     *addr,
 		Epoch:    epoch,
 		Task:     "GPT-char",
-		Subtitle: fmt.Sprintf("tinyshakespeare · %d windows · seq %d · causal MHA · A→B→A2 · SIMD", len(sp.Train), seqLen),
+		Subtitle: fmt.Sprintf("live_gpt v%s · 1–3 cameral freeze · tinyshakespeare · %d windows · seq %d · causal MHA · A→B→A2 · SIMD", Version, len(sp.Train), seqLen),
 	}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
@@ -175,6 +187,11 @@ func main() {
 	if ctx.Err() != nil {
 		fmt.Printf("\nStopped — progress saved under %s (re-run to resume mid-epoch).\n", *ckptDir)
 		return
+	}
+	if path, err := writeLivePDF(srv, *pdfOut); err != nil {
+		fmt.Fprintln(os.Stderr, "pdf:", err)
+	} else {
+		fmt.Printf("\nWrote %s (live_gpt v%s)\n", path, Version)
 	}
 	fmt.Printf("\nEpoch %d complete. Re-run `go run .` for epoch %d (weights continue).\n", epoch, epoch+1)
 	fmt.Println("Dashboard still serving — Ctrl+C to exit.")
@@ -321,4 +338,56 @@ func firstLANIPv4() string {
 		}
 	}
 	return ""
+}
+
+func defaultPDFPath() string {
+	return filepath.Join("results", fmt.Sprintf("live_gpt-v%s-lucy-report.pdf", Version))
+}
+
+func writePDFAndExit(resume *checkpoint.Progress, cells []permute.Cell, addr, out string) {
+	if resume == nil || len(resume.Completed) == 0 {
+		fmt.Fprintln(os.Stderr, "no checkpoint results — run a sweep before -pdf")
+		os.Exit(1)
+	}
+	tr := pulse.New()
+	epoch := resume.Epoch
+	if epoch < 1 {
+		epoch = 1
+	}
+	srv := &dash.Server{
+		Tracker:  tr,
+		Cells:    cells,
+		Addr:     addr,
+		Epoch:    epoch,
+		ID:       "live_gpt",
+		Task:     "GPT-char",
+		Subtitle: fmt.Sprintf("live_gpt v%s · 1–3 cameral freeze · %d finished cells · causal MHA", Version, len(resume.Completed)),
+	}
+	cfg := runner.DefaultConfig(cells)
+	cfg.Epoch = epoch
+	cfg.Resume = resume
+	runner.Hydrate(tr, cfg, fmt.Sprintf("pdf v%s — %d/%d recorded", Version, len(resume.Completed), len(cells)))
+	path, err := writeLivePDF(srv, out)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Wrote %s  (%d cells, epoch %d, live_gpt v%s)\n", path, len(resume.Completed), epoch, Version)
+}
+
+func writeLivePDF(srv *dash.Server, out string) (string, error) {
+	if out == "" {
+		out = defaultPDFPath()
+	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil && filepath.Dir(out) != "." {
+		return "", err
+	}
+	pdf, err := report.PDFTide(srv.Report())
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(out, pdf, 0o644); err != nil {
+		return "", err
+	}
+	return out, nil
 }

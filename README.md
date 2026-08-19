@@ -1,5 +1,9 @@
 # live_gpt
 
+**v0.5.0** — freeze of **single / bicameral / tricameral** (1–3 heads). Lucy PDF
+from this matrix is `results/live_gpt-v0.5.0-lucy-report.pdf`. **v1.0.0** is
+reserved for 4+ camerals (that sweep will change the PDF).
+
 Live mid-stream adaptation benchmark on **Tiny Shakespeare** (the same
 character stream [nanoGPT](https://github.com/karpathy/nanoGPT) uses for
 `shakespeare_char`). One host of the [`tide`](../tide) serve+train engine.
@@ -64,6 +68,14 @@ go run . -mode screen -arches cnn
 ```
 
 First run downloads Karpathy’s tinyshakespeare into `data/`. Re-run resumes; `-fresh` wipes.
+
+After a finished epoch the Lucy PDF is written under `results/`. From an
+existing checkpoint (no train):
+
+```bash
+go run . -pdf
+# → results/live_gpt-v0.5.0-lucy-report.pdf
+```
 
 ## Stack
 
