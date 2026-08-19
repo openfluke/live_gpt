@@ -56,6 +56,7 @@ Default **`-mode sprint`**: all dtypes × **FormatNone** × all Welvet train mod
 | `-mode` | `sprint` | `sprint` \| `screen` \| `smoke` |
 | `-train-n` | `4096` | windows per cell (`0` = all ~80%) |
 | `-cams` | `4-15` | Welvet Parallel branch counts (`4-15`, `8`, `1-3`, `cameral×12`) |
+| `-modes` | *(matrix)* | csv train modes, or `step` for every Step* pipe mode |
 | `-micro` | `8` | batch (must stay 8; View is `[8, 1024]`) |
 | `-data` | `data` | tinyshakespeare cache |
 | `-ckpt` | `checkpoint` | progress + inflight weights |
@@ -73,6 +74,7 @@ go run . -addr 0.0.0.0:8155
 go run . -mode smoke -autostart   # tiny probe
 go run . -mode screen
 go run . -cams 8                  # one width
+go run . -modes step -ckpt checkpoint-step -fresh   # only the 1D step pipe
 go run . -fresh                   # new 4–15 IDs; do not resume v0.5.0 cells
 ```
 

@@ -56,16 +56,6 @@ func (n *StackNet) TrainStep(x, target *core.Tensor[float32], lr float64, mode p
 	if err != nil {
 		return 0, err
 	}
-	ticks := 1
-	if mode.IsStepSched() {
-		ticks = 3
-	}
-	for i := 0; i < ticks-1; i++ {
-		if _, _, err = parallel.ForwardStack(n.Stack, x); err != nil {
-			return 0, err
-		}
-	}
-	// Next-char CE gap (softmax − one-hot), then the same Welvet credit walk.
 	return parallel.TrainStackCE(n.Stack, x, target, wv, lr)
 }
 

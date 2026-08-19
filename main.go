@@ -38,6 +38,7 @@ func main() {
 	mode := flag.String("mode", "sprint", "permutation set: sprint | screen | smoke  (no k-quants)")
 	cams := flag.String("cams", "", "cameral counts (Welvet Parallel branches). Default 4-15. e.g. 4-15, 8, 1-3")
 	arches := flag.String("arches", "", "alias of -cams")
+	modes := flag.String("modes", "", "csv train modes, or step / all (empty = matrix default)")
 	trainN := flag.Int("train-n", 4096, "train windows per cell (0 = all 80% windows)")
 	dataDir := flag.String("data", "data", "tinyshakespeare cache directory")
 	ckptDir := flag.String("ckpt", "checkpoint", "progress + model checkpoint directory")
@@ -62,7 +63,8 @@ func main() {
 	fmt.Printf(" SIMD linked: %v\n", simd.Enabled())
 	fmt.Printf(" Dashboard:   %s\n", dashURLs(*addr))
 	fmt.Printf(" Mode:        %s\n", *mode)
-	fmt.Printf(" Checkpoint:  %s (every %ds)\n\n", *ckptDir, *ckptSec)
+	fmt.Printf(" Checkpoint:  %s (every %ds)\n", *ckptDir, *ckptSec)
+	fmt.Printf(" LR:          %g\n\n", *lr)
 
 	pcfg, err := matrix(*mode)
 	if err != nil {
@@ -82,8 +84,19 @@ func main() {
 			pcfg.Cams = n
 		}
 	}
+	if spec := strings.TrimSpace(*modes); spec != "" {
+		only, err := permute.ParseModes(spec)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if len(only) > 0 {
+			pcfg.Modes = only
+		}
+	}
 	cells := permute.Expand(pcfg)
 	fmt.Printf(" Cameral:      %s\n", camLabel(pcfg.Cams))
+	fmt.Printf(" Train modes:  %d  %s\n", len(pcfg.Modes), modeList(pcfg.Modes))
 	store := checkpoint.New(*ckptDir, *mode)
 	var resume *checkpoint.Progress
 	if !*fresh {
@@ -94,7 +107,7 @@ func main() {
 		}
 	}
 	if *pdfOnly {
-		writePDFAndExit(resume, cells, *addr, *pdfOut)
+		writePDFAndExit(resume, cells, *addr, *pdfOut, *lr)
 		return
 	}
 
@@ -137,6 +150,7 @@ func main() {
 		Epoch:    epoch,
 		Task:     "GPT-char",
 		Subtitle: fmt.Sprintf("live_gpt v%s · %s · tinyshakespeare · %d windows · seq %d · causal MHA · A→B→A2 · SIMD", Version, camLabel(pcfg.Cams), len(sp.Train), seqLen),
+		LR:       *lr,
 	}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
@@ -234,6 +248,17 @@ func camLabel(ns []int) string {
 		parts[i] = fmt.Sprintf("%d", n)
 	}
 	return "cams " + strings.Join(parts, ",")
+}
+
+func modeList(ms []permute.TrainMode) string {
+	if len(ms) == 0 {
+		return "(matrix default)"
+	}
+	parts := make([]string, len(ms))
+	for i, m := range ms {
+		parts[i] = string(m)
+	}
+	return strings.Join(parts, ",")
 }
 
 func camLabelFromCells(cells []permute.Cell) string {
@@ -372,14 +397,17 @@ func firstLANIPv4() string {
 	return ""
 }
 
-func defaultPDFPath() string {
-	return filepath.Join("results", fmt.Sprintf("live_gpt-v%s-lucy-report.pdf", Version))
+func defaultPDFPath(lr float64) string {
+	return filepath.Join("results", fmt.Sprintf("live_gpt-v%s-lr%s-lucy-report.pdf", Version, report.FormatLR(lr)))
 }
 
-func writePDFAndExit(resume *checkpoint.Progress, cells []permute.Cell, addr, out string) {
+func writePDFAndExit(resume *checkpoint.Progress, cells []permute.Cell, addr, out string, lr float64) {
 	if resume == nil || len(resume.Completed) == 0 {
 		fmt.Fprintln(os.Stderr, "no checkpoint results — run a sweep before -pdf")
 		os.Exit(1)
+	}
+	if resume.LR > 0 {
+		lr = resume.LR
 	}
 	tr := pulse.New()
 	epoch := resume.Epoch
@@ -393,23 +421,24 @@ func writePDFAndExit(resume *checkpoint.Progress, cells []permute.Cell, addr, ou
 		Epoch:    epoch,
 		ID:       "live_gpt",
 		Task:     "GPT-char",
-		Subtitle: fmt.Sprintf("live_gpt v%s · %s · %d finished cells · causal MHA", Version, camLabelFromCells(cells), len(resume.Completed)),
+		Subtitle: fmt.Sprintf("live_gpt v%s · %s · %d finished cells · causal MHA · lr %s", Version, camLabelFromCells(cells), len(resume.Completed), report.FormatLR(lr)),
+		LR:       lr,
 	}
 	cfg := runner.DefaultConfig(cells)
 	cfg.Epoch = epoch
 	cfg.Resume = resume
-	runner.Hydrate(tr, cfg, fmt.Sprintf("pdf v%s — %d/%d recorded", Version, len(resume.Completed), len(cells)))
+	runner.Hydrate(tr, cfg, fmt.Sprintf("pdf v%s — %d/%d recorded · lr %s", Version, len(resume.Completed), len(cells), report.FormatLR(lr)))
 	path, err := writeLivePDF(srv, out)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Printf("Wrote %s  (%d cells, epoch %d, live_gpt v%s)\n", path, len(resume.Completed), epoch, Version)
+	fmt.Printf("Wrote %s  (%d cells, epoch %d, lr %s, live_gpt v%s)\n", path, len(resume.Completed), epoch, report.FormatLR(lr), Version)
 }
 
 func writeLivePDF(srv *dash.Server, out string) (string, error) {
 	if out == "" {
-		out = defaultPDFPath()
+		out = defaultPDFPath(srv.LR)
 	}
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil && filepath.Dir(out) != "." {
 		return "", err
