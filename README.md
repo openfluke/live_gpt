@@ -1,8 +1,11 @@
 # live_gpt
 
-**v0.5.0** — freeze of **single / bicameral / tricameral** (1–3 heads). Lucy PDF
-from this matrix is `results/live_gpt-v0.5.0-lucy-report.pdf`. **v1.0.0** is
-reserved for 4+ camerals (that sweep will change the PDF).
+**v1.0.0** — Welvet Parallel **cameral 4–15**. Lucy PDF lands at
+`results/live_gpt-v1.0.0-lucy-report.pdf`. **v0.5.0** was the 1–3 named-arch freeze.
+
+Cameral width is a tide permute axis (`-cams 4-15`, or `8`, or `1-3`). Other hosts
+can pass any range; ocean/dash label `cameral×N` from the cell. `live_mnist` is
+unchanged.
 
 Live mid-stream adaptation benchmark on **Tiny Shakespeare** (the same
 character stream [nanoGPT](https://github.com/karpathy/nanoGPT) uses for
@@ -29,7 +32,7 @@ SoftAcc chance is ~`100/vocab` (~1.5% on ~65 chars), not 25% 4-way XOR.
 
 ## Network
 
-**single** (`-arches cnn`)
+**cameral×1** (`-cams 1`)
 ```
 Embedding (vocab × 32)
   → MHA DecoderCausal (32 dim, 4 heads, RoPE, causal)
@@ -37,25 +40,27 @@ Embedding (vocab × 32)
   → Dense → vocab
 ```
 
-**bicameral / tricameral** — same MHA stem, then Dense → Parallel(n×Dense, add) → Dense → vocab.
+**cameral×N** (N≥2) — same MHA stem, then Dense → Parallel(N×Dense, add) → Dense → vocab.
 
 Backend: **SIMD**. Default train set: **4096** non-overlapping 32-char windows from the 80% split (`-train-n 0` for all).
 
 ## Matrix
 
-Default **`-mode sprint`**: all dtypes × **FormatNone** × all Welvet train modes × single/bi/tri.
+Default **`-mode sprint`**: all dtypes × **FormatNone** × all Welvet train modes × **cams 4–15**.
 **No k-quants.** (`-mode full` is an alias of sprint.)
 
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `-mode` | `sprint` | `sprint` \| `screen` \| `smoke` |
 | `-train-n` | `4096` | windows per cell (`0` = all ~80%) |
-| `-arches` | all | `cnn` (single), `bicameral`, `tricameral` |
+| `-cams` | `4-15` | Welvet Parallel branch counts (`4-15`, `8`, `1-3`, `cameral×12`) |
 | `-micro` | `8` | batch (must stay 8; View is `[8, 1024]`) |
 | `-data` | `data` | tinyshakespeare cache |
 | `-ckpt` | `checkpoint` | progress + inflight weights |
 
-`screen` = Lucy 6 × single × all dtypes. `smoke` = 3 dtypes × all modes × 3 arches.
+`screen` = Lucy 6 × cameral×4 × FormatNone dtypes. `smoke` = 3 dtypes × all modes × cams 4 and 15.
+
+Cell IDs changed from v0.5.0 (`|single|` / `|bicameral|`) to `|cameral×N|`. Use `-fresh` for a new epoch-1 sweep.
 
 ## Run
 
@@ -64,7 +69,9 @@ cd live_gpt
 go run . -addr 0.0.0.0:8155
 # open the dash, press Start
 go run . -mode smoke -autostart   # tiny probe
-go run . -mode screen -arches cnn
+go run . -mode screen
+go run . -cams 8                  # one width
+go run . -fresh                   # new 4–15 IDs; do not resume v0.5.0 cells
 ```
 
 First run downloads Karpathy’s tinyshakespeare into `data/`. Re-run resumes; `-fresh` wipes.
@@ -74,7 +81,7 @@ existing checkpoint (no train):
 
 ```bash
 go run . -pdf
-# → results/live_gpt-v0.5.0-lucy-report.pdf
+# → results/live_gpt-v1.0.0-lucy-report.pdf
 ```
 
 ## Stack

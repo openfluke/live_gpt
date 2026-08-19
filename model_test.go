@@ -59,6 +59,32 @@ func TestBuildAndStep(t *testing.T) {
 	t.Logf("soft=%.2f bytes=%d", soft, net.WeightBytes())
 }
 
+func TestBuildCameral15(t *testing.T) {
+	c := CorpusFromString(stringsRepeat("To be or not to be, that is the question. ", 40))
+	sp := makeSplit(c, seqLen, 32, 2)
+	cell := permuteCell()
+	cell.Cams = 15
+	cell.Arch = permute.ArchForCams(15)
+	cell.ID = cell.String()
+	g := defaultGeo(sp.Vocab, 8)
+	net, err := buildNet(cell, g)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	ds := newTideDS(sp, seqLen, 8, 2)
+	s := ds.NextServe("A")
+	if _, _, err := net.ServeEval(s.X, s.Target); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	tr, ok := ds.NextTrain()
+	if !ok {
+		t.Fatal("no train batch")
+	}
+	if _, err := net.TrainStep(tr.X, tr.Target, 0.02, cell.Mode); err != nil {
+		t.Fatalf("train: %v", err)
+	}
+}
+
 func stringsRepeat(s string, n int) string {
 	b := make([]byte, 0, len(s)*n)
 	for i := 0; i < n; i++ {

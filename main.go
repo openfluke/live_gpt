@@ -2,8 +2,8 @@
 //
 // Tiny Shakespeare (same file as karpathy/nanoGPT shakespeare_char). Next-char
 // classification over a 32-token context. Stem is causal MHA (not CNN).
-// Default matrix: all dtypes × FormatNone × all train modes × single/bi/tri.
-// No k-quants. live_mnist keeps nil Build / chain.Model.
+// Default matrix: all dtypes × FormatNone × all train modes × cameral 4–15.
+// No k-quants. live_mnist is untouched.
 package main
 
 import (
@@ -29,14 +29,15 @@ import (
 	"github.com/openfluke/welvet/simd"
 )
 
-// Version is the live_gpt freeze this binary reports. v0.5.0 is single / bi / tri
-// (1–3 cameral heads). v1.0.0 is reserved for 4+ camerals, which will change the PDF.
-const Version = "0.5.0"
+// Version is the live_gpt freeze this binary reports. v1.0.0 is Welvet Parallel
+// cameral 4–15 (v0.5.0 was named 1–3).
+const Version = "1.0.0"
 
 func main() {
 	addr := flag.String("addr", "0.0.0.0:8155", "dashboard listen address (0.0.0.0 = all interfaces)")
 	mode := flag.String("mode", "sprint", "permutation set: sprint | screen | smoke  (no k-quants)")
-	arches := flag.String("arches", "", "limit arches: comma list single,bicameral,tricameral (cnn still accepted)")
+	cams := flag.String("cams", "", "cameral counts (Welvet Parallel branches). Default 4-15. e.g. 4-15, 8, 1-3")
+	arches := flag.String("arches", "", "alias of -cams")
 	trainN := flag.Int("train-n", 4096, "train windows per cell (0 = all 80% windows)")
 	dataDir := flag.String("data", "data", "tinyshakespeare cache directory")
 	ckptDir := flag.String("ckpt", "checkpoint", "progress + model checkpoint directory")
@@ -53,8 +54,8 @@ func main() {
 	fmt.Println("════════════════════════════════════════════════════════════")
 	fmt.Printf(" live_gpt v%s — tide × Welvet causal MHA @ SIMD\n", Version)
 	fmt.Println(" data: tinyshakespeare char LM (nanoGPT shakespeare_char)")
-	fmt.Println(" net:  Embedding → causal MHA → (cameral) Dense → vocab")
-	fmt.Println(" arch: single×1 | bicameral×2 | tricameral×3  (head only)")
+	fmt.Println(" net:  Embedding → causal MHA → Welvet Parallel cameral head → vocab")
+	fmt.Println(" arch: Welvet Parallel cameral×N  (-cams; sprint default 4–15)")
 	fmt.Println(" Score = Throughput × Availability × Acc / 10_000")
 	fmt.Println(" phase B: next-char +5 mod vocab (same Lucy remap as MNIST)")
 	fmt.Println("════════════════════════════════════════════════════════════")
@@ -68,10 +69,21 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if list := parseArches(*arches); len(list) > 0 {
-		pcfg.Arches = list
+	if use := strings.TrimSpace(*cams); use != "" || strings.TrimSpace(*arches) != "" {
+		if use == "" {
+			use = strings.TrimSpace(*arches)
+		}
+		n, err := permute.ParseCams(use)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if len(n) > 0 {
+			pcfg.Cams = n
+		}
 	}
 	cells := permute.Expand(pcfg)
+	fmt.Printf(" Cameral:      %s\n", camLabel(pcfg.Cams))
 	store := checkpoint.New(*ckptDir, *mode)
 	var resume *checkpoint.Progress
 	if !*fresh {
@@ -86,7 +98,7 @@ func main() {
 		return
 	}
 
-	fmt.Printf(" Permutations: %d (batch size %d)  dtypes×FormatNone×modes×arches\n", len(cells), *batch)
+	fmt.Printf(" Permutations: %d (batch size %d)  dtypes×FormatNone×modes×cams\n", len(cells), *batch)
 	fmt.Println("Loading tinyshakespeare…")
 	corp, err := LoadShakespeare(*dataDir)
 	if err != nil {
@@ -124,7 +136,7 @@ func main() {
 		Addr:     *addr,
 		Epoch:    epoch,
 		Task:     "GPT-char",
-		Subtitle: fmt.Sprintf("live_gpt v%s · 1–3 cameral freeze · tinyshakespeare · %d windows · seq %d · causal MHA · A→B→A2 · SIMD", Version, len(sp.Train), seqLen),
+		Subtitle: fmt.Sprintf("live_gpt v%s · %s · tinyshakespeare · %d windows · seq %d · causal MHA · A→B→A2 · SIMD", Version, camLabel(pcfg.Cams), len(sp.Train), seqLen),
 	}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
@@ -198,50 +210,70 @@ func main() {
 	<-ctx.Done()
 }
 
+func camLabel(ns []int) string {
+	if len(ns) == 0 {
+		return "cameral×N"
+	}
+	if len(ns) == 1 {
+		return fmt.Sprintf("cameral×%d", ns[0])
+	}
+	lo, hi := ns[0], ns[0]
+	for _, n := range ns {
+		if n < lo {
+			lo = n
+		}
+		if n > hi {
+			hi = n
+		}
+	}
+	if hi-lo+1 == len(ns) {
+		return fmt.Sprintf("cameral %d–%d", lo, hi)
+	}
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = fmt.Sprintf("%d", n)
+	}
+	return "cams " + strings.Join(parts, ",")
+}
+
+func camLabelFromCells(cells []permute.Cell) string {
+	seen := map[int]bool{}
+	var ns []int
+	for _, c := range cells {
+		n := c.Cams
+		if n < 1 {
+			n = permute.CamsOf(c.Arch)
+		}
+		if n < 1 || seen[n] {
+			continue
+		}
+		seen[n] = true
+		ns = append(ns, n)
+	}
+	return camLabel(ns)
+}
+
 func matrix(mode string) (permute.Config, error) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "sprint", "full":
-		return permute.Sprint(), nil
+		s := permute.Sprint()
+		s.Cams = permute.CamsRange(4, 15)
+		return s, nil
 	case "screen":
 		s := permute.Sprint()
 		s.Modes = permute.LucyModes()
-		s.Arches = []permute.ArchKind{permute.ArchSingle}
+		s.Cams = []int{4}
 		return s, nil
 	case "smoke":
 		return permute.Config{
 			DTypes:  []core.DType{core.DTypeFloat32, core.DTypeFloat16, core.DTypeInt8},
 			Formats: []quant.Format{quant.FormatNone},
 			Modes:   permute.AllModes(),
-			Arches:  permute.AllArches(),
+			Cams:    []int{4, 15},
 		}, nil
 	default:
 		return permute.Config{}, fmt.Errorf("unknown -mode %q (sprint|screen|smoke)", mode)
 	}
-}
-
-func parseArches(s string) []permute.ArchKind {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	var out []permute.ArchKind
-	for _, p := range strings.Split(s, ",") {
-		p = strings.ToLower(strings.TrimSpace(p))
-		switch p {
-		case "":
-			continue
-		case "cnn", "single":
-			out = append(out, permute.ArchSingle)
-		case "bicameral", "bi":
-			out = append(out, permute.ArchBicameral)
-		case "tricameral", "tri":
-			out = append(out, permute.ArchTricameral)
-		default:
-			fmt.Fprintf(os.Stderr, "unknown arch %q (single|bicameral|tricameral)\n", p)
-			os.Exit(2)
-		}
-	}
-	return out
 }
 
 func printBests(title string, b pulse.Best) {
@@ -361,7 +393,7 @@ func writePDFAndExit(resume *checkpoint.Progress, cells []permute.Cell, addr, ou
 		Epoch:    epoch,
 		ID:       "live_gpt",
 		Task:     "GPT-char",
-		Subtitle: fmt.Sprintf("live_gpt v%s · 1–3 cameral freeze · %d finished cells · causal MHA", Version, len(resume.Completed)),
+		Subtitle: fmt.Sprintf("live_gpt v%s · %s · %d finished cells · causal MHA", Version, camLabelFromCells(cells), len(resume.Completed)),
 	}
 	cfg := runner.DefaultConfig(cells)
 	cfg.Epoch = epoch
