@@ -1,10 +1,13 @@
 package main
 
 import (
+	"math/rand/v2"
 	"testing"
 
 	"github.com/openfluke/tide/permute"
 	"github.com/openfluke/welvet/core"
+	"github.com/openfluke/welvet/layers/dense"
+	"github.com/openfluke/welvet/layers/parallel"
 	"github.com/openfluke/welvet/quant"
 )
 
@@ -57,6 +60,100 @@ func TestBuildAndStep(t *testing.T) {
 		t.Fatalf("train: %v", err)
 	}
 	t.Logf("soft=%.2f bytes=%d", soft, net.WeightBytes())
+}
+
+func TestTrainStackCEFitsOneHot(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	h, err := dense.NewConfigured(8, 4, core.ActivationLinear, core.DTypeFloat32, quant.FormatNone, randN(8*4, rng))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := parallel.NewStack(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := core.NewTensor[float32](4, 8)
+	for i := range x.Data {
+		x.Data[i] = 0.2
+	}
+	target := core.NewTensor[float32](4, 4)
+	for b := 0; b < 4; b++ {
+		target.Data[b*4+1] = 1
+	}
+	for i := 0; i < 40; i++ {
+		if _, err := parallel.TrainStackCE(st, x, target, parallel.ModeNormalBP, 0.2); err != nil {
+			t.Fatalf("step %d: %v", i, err)
+		}
+	}
+	_, out, err := parallel.ForwardStack(st, x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	okN := 0
+	for b := 0; b < 4; b++ {
+		best, bv := 0, out.Data[b*4]
+		for c := 1; c < 4; c++ {
+			if out.Data[b*4+c] > bv {
+				bv, best = out.Data[b*4+c], c
+			}
+		}
+		if best == 1 {
+			okN++
+		}
+	}
+	if okN < 4 {
+		t.Fatalf("linear CE head should pick class 1, got %d/4 logits=%v", okN, out.Data)
+	}
+}
+
+func TestLearnsNextChar(t *testing.T) {
+	c := CorpusFromString(stringsRepeat("To be or not to be, that is the question. ", 80))
+	sp := makeSplit(c, seqLen, 64, 3)
+	cell := permuteCell()
+	cell.Cams = 4
+	cell.Arch = permute.ArchForCams(4)
+	cell.ID = cell.String()
+	g := defaultGeo(sp.Vocab, 8)
+	net, err := buildNet(cell, g)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	ds := newTideDS(sp, seqLen, 8, 3)
+	chance := 100.0 / float64(sp.Vocab)
+	var last, first float64
+	for i := 0; i < 80; i++ {
+		tr, ok := ds.NextTrain()
+		if !ok {
+			ds.ResetEpoch(0)
+			tr, ok = ds.NextTrain()
+			if !ok {
+				t.Fatal("no train batch")
+			}
+		}
+		last, err = net.TrainStep(tr.X, tr.Target, 0.05, cell.Mode)
+		if err != nil {
+			t.Fatalf("step %d: %v", i, err)
+		}
+		if i == 0 {
+			first = last
+		}
+	}
+	s := ds.NextServe("A")
+	preds, soft, err := net.ServeEval(s.X, s.Target)
+	if err != nil {
+		t.Fatalf("eval: %v", err)
+	}
+	okN := 0
+	for i, p := range preds {
+		if i < len(s.Labels) && p == s.Labels[i] {
+			okN++
+		}
+	}
+	acc := 100 * float64(okN) / float64(len(preds))
+	t.Logf("chance=%.1f soft=%.1f acc=%.1f loss0=%.3f loss80=%.3f vocab=%d", chance, soft, acc, first, last, sp.Vocab)
+	if soft < chance*2 && acc < chance*3 {
+		t.Fatalf("CE should leave chance: soft=%.1f acc=%.1f chance=%.1f", soft, acc, chance)
+	}
 }
 
 func TestBuildCameral15(t *testing.T) {

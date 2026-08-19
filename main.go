@@ -54,7 +54,7 @@ func main() {
 	fmt.Println("════════════════════════════════════════════════════════════")
 	fmt.Printf(" live_gpt v%s — tide × Welvet causal MHA @ SIMD\n", Version)
 	fmt.Println(" data: tinyshakespeare char LM (nanoGPT shakespeare_char)")
-	fmt.Println(" net:  Embedding → causal MHA → Welvet Parallel cameral head → vocab")
+	fmt.Println(" net:  Embedding → residual causal MHA → Welvet Parallel cameral head → vocab")
 	fmt.Println(" arch: Welvet Parallel cameral×N  (-cams; sprint default 4–15)")
 	fmt.Println(" Score = Throughput × Availability × Acc / 10_000")
 	fmt.Println(" phase B: next-char +5 mod vocab (same Lucy remap as MNIST)")

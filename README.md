@@ -30,17 +30,19 @@ Phase **A → B → A2** uses tide’s usual remap: on B, `label = (label+5) % v
 
 SoftAcc chance is ~`100/vocab` (~1.5% on ~65 chars), not 25% 4-way XOR.
 
+Train is **softmax CE** (`TrainStackCE`: softmax(logits) − one-hot, mean over batch), then the same Welvet credit walk as every other mode. MSE on a 65-way one-hot stays uniform and never leaves chance.
+
 ## Network
 
 **cameral×1** (`-cams 1`)
 ```
 Embedding (vocab × 32)
-  → MHA DecoderCausal (32 dim, 4 heads, RoPE, causal)
+  → residual causal MHA (32 dim, 4 heads, RoPE)
   → View [B, 32×32]
   → Dense → vocab
 ```
 
-**cameral×N** (N≥2) — same MHA stem, then Dense → Parallel(N×Dense, add) → Dense → vocab.
+**cameral×N** (N≥2) — same residual MHA stem, then Dense → Parallel(N×Dense, add) → Dense → vocab.
 
 Backend: **SIMD**. Default train set: **4096** non-overlapping 32-char windows from the 80% split (`-train-n 0` for all).
 

@@ -65,7 +65,8 @@ func (n *StackNet) TrainStep(x, target *core.Tensor[float32], lr float64, mode p
 			return 0, err
 		}
 	}
-	return parallel.TrainStackMSE(n.Stack, x, target, wv, lr)
+	// Next-char CE gap (softmax − one-hot), then the same Welvet credit walk.
+	return parallel.TrainStackCE(n.Stack, x, target, wv, lr)
 }
 
 func (n *StackNet) ServeEval(x, target *core.Tensor[float32]) (preds []int, softAcc float64, err error) {
@@ -145,7 +146,7 @@ func buildNet(cell permute.Cell, g geo) (runner.Net, error) {
 func buildStack(cell permute.Cell, g geo, rng *rand.Rand) (*parallel.Stack, error) {
 	emb, err := embedding.NewConfigured(embedding.Config{
 		VocabSize: g.Vocab, EmbeddingDim: g.DModel, SeqLen: g.SeqLen,
-	}, core.DTypeFloat32, quant.FormatNone, randN(g.Vocab*g.DModel, rng))
+	}, core.DTypeFloat32, quant.FormatNone, randScale(g.Vocab*g.DModel, 0.02, rng))
 	if err != nil {
 		return nil, err
 	}
@@ -154,9 +155,17 @@ func buildStack(cell permute.Cell, g geo, rng *rand.Rand) (*parallel.Stack, erro
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	q := g.DModel * cfg.QDim()
 	attn, err := mha.NewConfigured(cfg, core.DTypeFloat32, quant.FormatNone,
-		randN(q, rng), randN(q, rng), randN(q, rng), randN(g.DModel*g.DModel, rng))
+		xavier(g.DModel, cfg.QDim(), rng),
+		xavier(g.DModel, cfg.QDim(), rng),
+		xavier(g.DModel, cfg.QDim(), rng),
+		xavier(cfg.QDim(), g.DModel, rng))
+	if err != nil {
+		return nil, err
+	}
+	// Residual keeps embedding scale; a lone MHA with tiny init dies at 1e-4 and
+	// the cameral head cannot leave chance (no bias).
+	stem, err := parallel.ResidualGraft(attn)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +178,7 @@ func buildStack(cell permute.Cell, g geo, rng *rand.Rand) (*parallel.Stack, erro
 	if err != nil {
 		return nil, err
 	}
-	kids := append([]any{emb, attn, view}, tail...)
+	kids := append([]any{emb, stem, view}, tail...)
 	return parallel.NewStack(kids...)
 }
 
@@ -186,7 +195,7 @@ func camsOf(cell permute.Cell) int {
 
 func classTail(inFeat, vocab int, cell permute.Cell, rng *rand.Rand) ([]any, error) {
 	if camsOf(cell) < 2 {
-		h, err := dense.NewConfigured(inFeat, vocab, core.ActivationLinear, core.DTypeFloat32, quant.FormatNone, randN(inFeat*vocab, rng))
+		h, err := dense.NewConfigured(inFeat, vocab, core.ActivationLinear, core.DTypeFloat32, quant.FormatNone, xavier(inFeat, vocab, rng))
 		if err != nil {
 			return nil, err
 		}
@@ -203,13 +212,13 @@ func cameralSandwich(inFeat, outFeat, cams int, rng *rand.Rand) ([]any, error) {
 	if hidden < 8 {
 		hidden = 8
 	}
-	din, err := dense.NewConfigured(inFeat, hidden, core.ActivationTanh, core.DTypeFloat32, quant.FormatNone, randN(inFeat*hidden, rng))
+	din, err := dense.NewConfigured(inFeat, hidden, core.ActivationTanh, core.DTypeFloat32, quant.FormatNone, xavier(inFeat, hidden, rng))
 	if err != nil {
 		return nil, err
 	}
 	branches := make([]any, cams)
 	for i := 0; i < cams; i++ {
-		b, err := dense.NewConfigured(hidden, hidden, core.ActivationTanh, core.DTypeFloat32, quant.FormatNone, randN(hidden*hidden, rng))
+		b, err := dense.NewConfigured(hidden, hidden, core.ActivationTanh, core.DTypeFloat32, quant.FormatNone, xavier(hidden, hidden, rng))
 		if err != nil {
 			return nil, fmt.Errorf("hemi %d: %w", i, err)
 		}
@@ -221,19 +230,27 @@ func cameralSandwich(inFeat, outFeat, cams int, rng *rand.Rand) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	dout, err := dense.NewConfigured(hidden, outFeat, core.ActivationLinear, core.DTypeFloat32, quant.FormatNone, randN(hidden*outFeat, rng))
+	dout, err := dense.NewConfigured(hidden, outFeat, core.ActivationLinear, core.DTypeFloat32, quant.FormatNone, xavier(hidden, outFeat, rng))
 	if err != nil {
 		return nil, err
 	}
 	return []any{din, para, dout}, nil
 }
 
+func xavier(in, out int, rng *rand.Rand) []float32 {
+	return randScale(in*out, float32(1/math.Sqrt(float64(in))), rng)
+}
+
 func randN(n int, rng *rand.Rand) []float32 {
-	w := make([]float32, n)
 	scale := float32(1 / math.Sqrt(float64(n)))
 	if scale > 0.1 {
 		scale = 0.1
 	}
+	return randScale(n, scale, rng)
+}
+
+func randScale(n int, scale float32, rng *rand.Rand) []float32 {
+	w := make([]float32, n)
 	for i := range w {
 		w[i] = (rng.Float32()*2 - 1) * scale
 	}
@@ -283,6 +300,8 @@ func opBytes(op any) int64 {
 		return storeBytes(v.Weights)
 	case *mha.Layer:
 		return opBytes(v.Q) + opBytes(v.K) + opBytes(v.V) + opBytes(v.O)
+	case *parallel.ResidualSkip:
+		return opBytes(v.F)
 	case *embedding.Layer:
 		return storeBytes(v.Weights)
 	case *parallel.Layer:
